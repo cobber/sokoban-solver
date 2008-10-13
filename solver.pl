@@ -25,8 +25,10 @@ my $puzzles = import_puzzles( 'puzzles.txt' );
 
 foreach my $puzzle ( @{$puzzles} )
     {
+    print "\n\nNew Puzzle:\n";
     $puzzle->dump();
-    $puzzle->solve();
+    my @trace = $puzzle->solve();
+    printf "Trace: %s\n", join( ', ', @trace );
     $puzzle->dump();
     }
 
@@ -144,7 +146,7 @@ sub solve
     {
     my $s = shift;
 
-    return if $s->is_solved();
+    return 'solved' if $s->is_solved();
 
     if( $s->{'states_seen'}{$s->state()}++ )
         {
@@ -155,6 +157,7 @@ sub solve
     print "solving ...\n";
     $s->dump();
 
+    my @trace = ();
     my $mover = $s->{'mover'};
     foreach my $movement ( qw( up down left right ) )
         {
@@ -163,18 +166,26 @@ sub solve
             print "will move: $movement\n";
             my $state = $s->state();
             $mover->move( $movement );
-            $s->solve();
-            $s->restore( $state )   unless $s->is_solved();
+            my @successful_trace = $s->solve();
+            if( @successful_trace )
+                {
+                @trace = ( $movement, @successful_trace );
+                }
+            else
+                {
+                $s->restore( $state );
+                }
             }
-        last    if $s->is_solved();
+        last    if @trace;
         }
 
+    return @trace;
     }
 
 sub state
     {
     my $s = shift;
-    return join( ':', $s->{'status'}, map { $_->location() } $s->{'mover'}, @{$s->{'blocks'}} );
+    return join( ':', $s->{'status'}, $s->{'mover'}->location(), sort { $a <=> $b } map { $_->location() } @{$s->{'blocks'}} );
     }
 
 sub restore
