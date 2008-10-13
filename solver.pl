@@ -150,20 +150,20 @@ sub solve
 
     if( $s->{'states_seen'}{$s->state()}++ )
         {
-        print "skipping repeat...\n";
+#         print "skipping repeat...\n";
         return;
         }
 
-    print "solving ...\n";
+#     print "solving ...\n";
     $s->dump();
 
     my @trace = ();
     my $mover = $s->{'mover'};
-    foreach my $movement ( qw( up down left right ) )
+    foreach my $movement ( qw( left right up down ) )
         {
         if( $mover->can_move( $movement ) )
             {
-            print "will move: $movement\n";
+#             print "will move: $movement\n";
             my $state = $s->state();
             $mover->move( $movement );
             my @successful_trace = $s->solve();
@@ -191,19 +191,20 @@ sub state
 sub restore
     {
     my $s = shift;
-    printf "restoring: %s", $s->state();
+#     printf "restoring: %s", $s->state();
+    print "---\n";
     my @locations = split( /:/, shift );
     $s->{'status'} = shift( @locations );
     $_->move_to( $s->{'table'}[shift( @locations )] )  foreach $s->{'mover'}, @{$s->{'blocks'}};
-    printf " to: %s\n", $s->state();
+#     printf " to: %s\n", $s->state();
     }
 
 sub dump
     {
     my $s = shift;
 
-    printf "State:  %s\n", $s->state();
-    printf "Status: %s ( %x <=> %x )\n", ( $s->is_solved() ? 'SOLVED' : 'unsolved' ), $s->{'status'}, $s->{'solved_mask'};
+#     printf "State:  %s\n", $s->state();
+#     printf "Status: %s ( %x <=> %x )\n", ( $s->is_solved() ? 'SOLVED' : 'unsolved' ), $s->{'status'}, $s->{'solved_mask'};
     my $width = $s->{'width'};
     foreach my $cell ( @{$s->{'table'}} )
         {
@@ -255,7 +256,7 @@ sub can_move
     my $s = shift;
     my $direction = shift;
     my $neighbour = $s->{'container'}{$direction} or return;
-    printf "mover can move %s: %s\n", $direction, ( $neighbour->is_free() or ( $neighbour->{'contents'} and $neighbour->{'contents'}->can_move( $direction ) ) ) ? "yes" : "no";
+#     printf "mover can move %s: %s\n", $direction, ( $neighbour->is_free() or ( $neighbour->{'contents'} and $neighbour->{'contents'}->can_move( $direction ) ) ) ? "yes" : "no";
     return ( $neighbour->is_free()
             or ( $neighbour->{'contents'} and $neighbour->{'contents'}->can_move( $direction ) ) );   # can block move
     }
