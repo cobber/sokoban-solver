@@ -26,6 +26,8 @@ my $puzzles = import_puzzles( 'puzzles.txt' );
 foreach my $puzzle ( @{$puzzles} )
     {
     $puzzle->dump();
+    $puzzle->solve();
+    $puzzle->dump();
     }
 
 exit 0;
@@ -50,7 +52,7 @@ sub import_puzzles
         {
         chomp( $line );
 
-        if( $line =~ /^\s*$/ )
+        if( $line =~ m:^(//.*|\s*)$: )
             {
             $width  = 0;
             $height = 0;
@@ -66,7 +68,13 @@ sub import_puzzles
 
         if( ! $puzzle and $width and $height )
             {
-            $puzzle = puzzle->new( 'width' => $width, 'height' => $height, 'table' => [], );
+            $puzzle = puzzle->new(
+                    'width'  => $width,
+                    'height' => $height,
+                    'status' => 0,
+                    'table'  => [],
+                    'blocks' => [],
+                    );
             $row = 0;
             }
 
@@ -89,9 +97,9 @@ sub import_puzzles
 
             if( $import_cell =~ /x/i )
                 {
-                my $block = block->new( 'container' => $cell, 'display' => "\L$import_cell", );
-                $cell->{'contents'} = $block;
+                my $block = block->new( 'puzzle' => $puzzle, 'display' => "\L$import_cell", 'id' => scalar( @{$puzzle->{'blocks'}} ), );
                 push( @{$puzzle->{'blocks'}}, $block );
+                $block->move_to( $cell );
                 }
 
             if( $import_cell =~ /o/i )
@@ -114,24 +122,22 @@ sub import_puzzles
 
     close( IMPORT_FILE );
 
-    $_->setup()     foreach @{$puzzles};
+    $_->setup() foreach @{$puzzles};
 
     return $puzzles;
     }
 
 package puzzle;
 
+use YAML;
+
 sub new { my $c = shift; return bless { @_ }, $c; }
 
-sub setup
+sub setup { my $s = shift; $s->{'solved_mask'} = ( 1 << scalar( @{$s->{'blocks'}} ) ) - 1; }
+
+sub is_solved
     {
-    my $s = shift;
-    my $i = 0;
-    foreach( @{$s->{'blocks'}} )
-        {
-        $s->{'status'} |= 1 << ( $_->{'id'} = $i++ );
-        }
-    $s->{'solved_mask'} = ( 1 << $i ) - 1;
+    my $s = shift; return $s->{'solved_mask'} == $s->{'status'};
     }
 
 sub solve
@@ -140,19 +146,28 @@ sub solve
 
     return if $s->is_solved();
 
-    my $mover  = $s->{'mover'};
-    my @blocks = $s->{'blocks'};
-
-    my $state = $s->state();
-    foreach my $direction ( qw( up down left right ) )
+    if( $s->{'states_seen'}{$s->state()}++ )
         {
-        if( $mover->can_move( $direction ) )
-            {
-            $mover->move( $direction );
-            $s->solve();
-            }
+        print "skipping repeat...\n";
+        return;
         }
-    $s->restore( $state )   unless $s->is_solved();
+
+    print "solving ...\n";
+    $s->dump();
+
+    my $mover = $s->{'mover'};
+    foreach my $movement ( qw( up down left right ) )
+        {
+        if( $mover->can_move( $movement ) )
+            {
+            print "will move: $movement\n";
+            my $state = $s->state();
+            $mover->move( $movement );
+            $s->solve();
+            $s->restore( $state )   unless $s->is_solved();
+            }
+        last    if $s->is_solved();
+        }
 
     }
 
@@ -165,21 +180,19 @@ sub state
 sub restore
     {
     my $s = shift;
+    printf "restoring: %s", $s->state();
     my @locations = split( /:/, shift );
     $s->{'status'} = shift( @locations );
     $_->move_to( $s->{'table'}[shift( @locations )] )  foreach $s->{'mover'}, @{$s->{'blocks'}};
-    }
-
-sub is_solved
-    {
-    my $s = shift; return $s->{'solved_mask'} == $s->{'status'};
+    printf " to: %s\n", $s->state();
     }
 
 sub dump
     {
     my $s = shift;
 
-    printf "State: %s\n", $s->state();
+    printf "State:  %s\n", $s->state();
+    printf "Status: %s ( %x <=> %x )\n", ( $s->is_solved() ? 'SOLVED' : 'unsolved' ), $s->{'status'}, $s->{'solved_mask'};
     my $width = $s->{'width'};
     foreach my $cell ( @{$s->{'table'}} )
         {
@@ -194,18 +207,14 @@ sub dump
 
 package cell;
 
-sub new { my $c = shift; return bless { @_ }, $c; }
+sub new      { my $class = shift; return bless { @_ }, $class; }
 
-sub location { my $s = shift; $s->{'location'}; }
-sub is_goal  { my $s = shift; $s->{'display'} eq '_'; }
-sub is_wall  { my $s = shift; $s->{'display'} eq '#'; }
-sub is_free  { my $s = shift; ! $s->{'contents'}; }
-sub up       { my $s = shift; $s->{'up'}    || undef; }
-sub down     { my $s = shift; $s->{'down'}  || undef; }
-sub left     { my $s = shift; $s->{'left'}  || undef; }
-sub right    { my $s = shift; $s->{'right'} || undef; }
+sub location { my $cell = shift; $cell->{'location'}; }
+sub is_goal  { my $cell = shift; $cell->{'display'} eq '_'; }
+sub is_wall  { my $cell = shift; $cell->{'display'} eq '#'; }
+sub is_free  { my $cell = shift; not ( $cell->{'contents'} or $cell->is_wall() ); }
 
-sub display { my $s = shift; $s->{'contents'} ? $s->{'contents'}->display( $s->is_goal() ) : $s->{'display'}; }
+sub display  { my $cell = shift; $cell->{'contents'} ? $cell->{'contents'}->display() : $cell->{'display'}; }
 
 package block;
 
@@ -213,10 +222,19 @@ sub new      { my $c = shift; return bless { @_ }, $c; }
 sub location { my $s = shift; $s->{'container'}->location(); }
 sub id       { my $s = shift; $s->{'id'}; }
 sub mask     { my $s = shift; 1 << $s->{'id'}; }
-sub display  { my $s = shift; my $g = shift; $g ? "\U$s->{'display'}" : $s->{'display'}; }
-sub move_to  { my $s = shift; $s->{'container'}{'contents'} = undef; $s->{'container'} = shift; $s->{'container'}{'contents'} = $s; }
-sub can_move { my $s = shift; my $direction = shift; $s->{$direction}->is_free(); }
-sub move     { my $s = shift; my $direction = shift; $s->move_to( $s->{$direction}->location() ); }
+sub display  { my $s = shift; $s->is_home() ? "\U$s->{'display'}" : $s->{'display'}; }
+sub is_home  { my $s = shift; $s->{'container'}->is_goal(); }
+sub can_move { my $s = shift; my $direction = shift; $s->{'container'}{$direction} and $s->{'container'}{$direction}->is_free(); }
+sub move     { my $s = shift; my $direction = shift; $s->move_to( $s->{'container'}{$direction} ); }
+sub move_to
+    {
+    my $s = shift;
+    $s->{'puzzle'}{'status'}      &= ~$s->mask();
+    $s->{'container'}{'contents'}  = undef if $s->{'container'};
+    $s->{'container'}              = shift;
+    $s->{'container'}{'contents'}  = $s;
+    $s->{'puzzle'}{'status'}      |= $s->mask() if $s->is_home();
+    }
 
 package mover;
 use base qw( block );
@@ -225,14 +243,25 @@ sub can_move
     {
     my $s = shift;
     my $direction = shift;
-    return $s->{$direction}->is_free()
-        or $s->{$direction}{'contents'} and $s->{$direction}{'contents'}->can_move( $direction );   # can block move
+    my $neighbour = $s->{'container'}{$direction} or return;
+    printf "mover can move %s: %s\n", $direction, ( $neighbour->is_free() or ( $neighbour->{'contents'} and $neighbour->{'contents'}->can_move( $direction ) ) ) ? "yes" : "no";
+    return ( $neighbour->is_free()
+            or ( $neighbour->{'contents'} and $neighbour->{'contents'}->can_move( $direction ) ) );   # can block move
     }
 
 sub move
     {
     my $s = shift;
     my $direction = shift;
-    $s->{$direction}{'contents'} and $s->{$direction}{'contents'}->move( $direction );  # move the block
-    $s->move_to( $s->{$direction}->location() );                                        # move mover
+    my $neighbour = $s->{'container'}{$direction} or return;
+    $neighbour->{'contents'} and $neighbour->{'contents'}->move( $direction );  # move the block
+    $s->move_to( $neighbour );                                                  # move mover
+    }
+
+sub move_to
+    {
+    my $s = shift;
+    $s->{'container'}{'contents'}  = undef if $s->{'container'};
+    $s->{'container'}              = shift;
+    $s->{'container'}{'contents'}  = $s;
     }
