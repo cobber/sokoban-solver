@@ -1,5 +1,26 @@
 #!/usr/local/bin/perl
 
+# Sokoban Solver
+#
+# Author:   Stephen Riehm
+# Date:     2008-10-20
+
+
+# Usage:
+#   Regression Tests:               sokosolver.pl
+#   All puzzles in a file:          sokosolver.pl filename
+#   Selected puzzles in a file:     sokosolver.pl filename <range>
+#
+#   Range can be any combination of:
+#       comma separated numbers
+#       ranges of the form {begin}-{end}
+#
+#       eg: 1,3-5,8 would solve puzzles 1, 3, 4, 5 and 8
+#
+# Known limitations:
+#   it's not necessarily very quick
+#   the solution can't have more than about 80 moves (deep recursion)
+
 # Puzzle Map Definition:
 #
 #   map characters:
@@ -26,9 +47,38 @@ my $opposite = {
 
 test_suite::run()   unless @ARGV;
 
+my @range_specs = ();
+for( my $arg = 0; $arg < @ARGV; $arg++ )
+    {
+    if( $ARGV[$arg] =~ /^[\d,-]+$/ )
+        {
+        push( @range_specs, splice( @ARGV, $arg, 1 ) );
+        }
+    }
+
 my $puzzles = importer::import_puzzles( <> );
 
-foreach my $puzzle ( @{$puzzles} )
+my @puzzle_range = ();
+foreach my $range_spec ( @range_specs )
+    {
+    foreach my $group ( split( /,/, $range_spec ) )
+        {
+        if( $group =~ /^(\d*)-(\d*)$/ )
+            {
+            my $start = $1 || 1;
+            my $end   = $2 || @{$puzzles};
+            push( @puzzle_range, $start-1 .. $end-1 );
+            }
+        else
+            {
+            push( @puzzle_range, $group-1 );
+            }
+        }
+    }
+
+@puzzle_range = ( 0 .. $#{$puzzles} )   unless @puzzle_range;
+
+foreach my $puzzle ( @{$puzzles}[@puzzle_range] )
     {
     print "\n";
     printf "Solving Puzzle Number %d\n", $puzzle->{'id'};
@@ -59,9 +109,8 @@ sub import_puzzles
         {
         chomp( $line );
 
-        next if $line =~ /^\s*;/;   # comments start with ;
-
-        if( $line =~ m:^(//.*|\s*)$: )
+        # skip non-sokoban map lines :-)
+        if( $line !~ /^\s*#(\s*[#\.\$\*\@\+]*\s*)*#\s*$/ )
             {
             if( $puzzle )
                 {
@@ -259,6 +308,7 @@ sub solve
 
     return( 'solved' ) if $puzzle->is_solved();
 
+    return if $level > 80;  # prevent deep recursion - solution must have less than 80 moves
     return if $puzzle->{'has_tried'}{$state_id}++;
 
     my @possible_moves = $puzzle->possible_moves();
@@ -300,7 +350,6 @@ sub replay
     my $puzzle = shift;
     my @moves  = @_;
     $puzzle->restore( $puzzle->{'original_state'} );
-    $puzzle->dump();
     pop( @moves );    # 'solved' marker
     foreach my $move ( @moves )
         {
@@ -323,16 +372,29 @@ sub state
     return join( ':', $puzzle->{'mover'}->{'cell'}{'id'}, map { $_->{'cell'}{'id'} } @{$puzzle->{'blocks'}} );
     }
 
+sub clear_cells
+    {
+    my $puzzle = shift;
+    foreach my $cell ( @{$puzzle->{'cells'}} )
+        {
+        if( $cell->{'contents'} )
+            {
+            $cell->{'contents'}{'cell'} = undef;
+            $cell->{'contents'}         = undef;
+            }
+        $cell->{'is_active'} = 0;
+        }
+    }
+
 sub restore
     {
     my $puzzle        = shift;
     my $recover_state = shift;
     $puzzle->{'score'} = 0;
     my @state = split( /:/, $recover_state );
-    my $mover_cell = $puzzle->{'cells'}[shift( @state )];
-    $puzzle->lift_mover();
+    $puzzle->clear_cells();
+    $puzzle->place_mover_in( $puzzle->{'cells'}[shift( @state )] );
     $puzzle->move_block_to( $_ => $puzzle->{'cells'}[shift( @state )] )  foreach @{$puzzle->{'blocks'}};
-    $puzzle->place_mover_in( $mover_cell );
     }
 
 sub dump
@@ -358,7 +420,7 @@ sub dump
             } while( $cell = $cell->{'right'} );
         print "\n";
         }
-    printf "Score:  %s ( %d of %d )\n", ( $puzzle->is_solved() ? 'SOLVED' : 'unsolved' ), $puzzle->{'score'}, $puzzle->{'top_score'};
+    printf "Score:  %s ( score: %d of %d )\n", ( $puzzle->is_solved() ? 'SOLVED' : 'unsolved' ), $puzzle->{'score'}, $puzzle->{'top_score'};
     }
 
 package cell;
