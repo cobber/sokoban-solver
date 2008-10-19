@@ -33,7 +33,11 @@ foreach my $puzzle ( @{$puzzles} )
     print "\n";
     printf "Solving Puzzle Number %d\n", $puzzle->{'id'};
     $puzzle->dump();
-    print Dump( $puzzle->solve() );
+    my $start = time();
+    my @solution = $puzzle->solve();
+    my $duration = time() - $start;
+    $puzzle->replay( @solution );
+    printf "Solution took %d seconds\n", $duration;
     }
 
 exit 0;
@@ -54,6 +58,8 @@ sub import_puzzles
     foreach my $line ( @_ )
         {
         chomp( $line );
+
+        next if $line =~ /^\s*;/;   # comments start with ;
 
         if( $line =~ m:^(//.*|\s*)$: )
             {
@@ -98,7 +104,7 @@ sub import_puzzles
                 {
                 my $mover = mover->new();
                 $puzzle->{'mover'} = $mover;
-                $mover->move_to( $cell );
+                $puzzle->place_mover_in( $cell );
                 }
 
             }
@@ -161,6 +167,7 @@ sub setup
     $puzzle->{'top_score'} = ( 1 << scalar( @{$puzzle->{'blocks'}} ) ) - 1;
     $puzzle->mark_corners();
     $puzzle->{'mover'}->{'cell'}->set_active();
+    $puzzle->{'original_state'} = $puzzle->state();
     }
 
 sub mark_corners
@@ -250,7 +257,7 @@ sub solve
     my $state_id  = $puzzle->state_id();    # state_id doesn't specify exactly where the mover is
     my @trace     = ();
 
-    return ( [ 'solved' ] ) if $puzzle->is_solved();
+    return( 'solved' ) if $puzzle->is_solved();
 
     return if $puzzle->{'has_tried'}{$state_id}++;
 
@@ -271,7 +278,13 @@ sub solve
 
         if( @successful_trace )
             {
-            @trace = ( [$block->{'display'} => $direction], @successful_trace );
+            @trace = ( { 
+                        'block_id'      => $block->{'id'},
+                        'block_display' => $block->{'display'},
+                        'direction'     => $direction,
+                        },
+                    @successful_trace
+                    );
             }
         else
             {
@@ -280,6 +293,22 @@ sub solve
         }
 
     return @trace;
+    }
+
+sub replay
+    {
+    my $puzzle = shift;
+    my @moves  = @_;
+    $puzzle->restore( $puzzle->{'original_state'} );
+    $puzzle->dump();
+    pop( @moves );    # 'solved' marker
+    foreach my $move ( @moves )
+        {
+        printf( "Move '%s' %s\n", $move->{'block_display'}, $move->{'direction'} );
+        $puzzle->move_block( $puzzle->{'blocks'}[$move->{'block_id'}], $move->{'direction'} );
+#         $puzzle->dump();
+        }
+    $puzzle->dump();
     }
 
 sub state_id
@@ -300,8 +329,10 @@ sub restore
     my $recover_state = shift;
     $puzzle->{'score'} = 0;
     my @state = split( /:/, $recover_state );
-    $puzzle->place_mover_in( $puzzle->{'cells'}[shift( @state )] );
+    my $mover_cell = $puzzle->{'cells'}[shift( @state )];
+    $puzzle->lift_mover();
     $puzzle->move_block_to( $_ => $puzzle->{'cells'}[shift( @state )] )  foreach @{$puzzle->{'blocks'}};
+    $puzzle->place_mover_in( $mover_cell );
     }
 
 sub dump
@@ -309,8 +340,7 @@ sub dump
     my $puzzle = shift;
     my $long   = shift || 0;
 
-    printf "Puzzle: %d\n", $puzzle->{'id'};
-    printf "Score:  %s ( %d of %d )\n", ( $puzzle->is_solved() ? 'SOLVED' : 'unsolved' ), $puzzle->{'score'}, $puzzle->{'top_score'};
+#     printf "Puzzle: %d\n", $puzzle->{'id'};
     foreach my $row ( @{$puzzle->{'table'}} )
         {
 #         printf "%s\n", join( "", map { $_->display() } @{$row} );
@@ -328,6 +358,7 @@ sub dump
             } while( $cell = $cell->{'right'} );
         print "\n";
         }
+    printf "Score:  %s ( %d of %d )\n", ( $puzzle->is_solved() ? 'SOLVED' : 'unsolved' ), $puzzle->{'score'}, $puzzle->{'top_score'};
     }
 
 package cell;
@@ -350,9 +381,13 @@ sub connect
 sub set_active
     {
     my $cell = shift;
-    return if $cell->is_active();
     return if $cell->is_wall();
-    return if $cell->has_block();
+    if( $cell->has_block() )
+        {
+        $cell->{'is_active'} = 0;
+        return;
+        }
+    return if $cell->is_active();
     $cell->{'is_active'} = 1;
     $cell->{$_}->set_active() foreach qw( up down left right );
     }
@@ -362,8 +397,8 @@ sub clear_active
     my $cell = shift;
     return unless $cell->is_active();
     return if $cell->is_wall();
-    return if $cell->has_block();
     $cell->{'is_active'} = 0;
+    return if $cell->has_block();
     $cell->{$_}->clear_active() foreach qw( up down left right );
     }
 
@@ -384,7 +419,7 @@ sub display
     my $cell = shift;
     return $cell->{'contents'}->display()   if $cell->{'contents'};
     return $cell->{'display'}               if $cell->is_wall or $cell->is_goal();
-    return 'X'                              if $cell->is_bad();
+#     return 'X'                              if $cell->is_bad();
     return $cell->{'display'};
     }
 
@@ -490,16 +525,19 @@ sub test0
     is( $puzzle->{'cells'}[0]->is_bad(),        '',     'not bad (is goal)' );
     is( $puzzle->{'cells'}[0]->is_free(),       '',     'not free' );
     is( $puzzle->{'cells'}[0]->is_goal(),       1,      'goal' );
+    is( $puzzle->{'cells'}[0]->is_active(),     '',     'not active' );
     is( $puzzle->{'cells'}[1]{'is_corner'},     '',     'not corner' );
     is( $puzzle->{'cells'}[1]->has_block(),     '',     'no block' );
     is( $puzzle->{'cells'}[1]->is_bad(),        '',     'not bad' );
     is( $puzzle->{'cells'}[1]->is_free(),       1,      'free (mover doesn\'t count)' );
     is( $puzzle->{'cells'}[1]->is_goal(),       '',     'not goal' );
+    is( $puzzle->{'cells'}[1]->is_active(),     1,      'active' );
     is( $puzzle->{'cells'}[2]{'is_corner'},     1,      'corner' );
     is( $puzzle->{'cells'}[2]->has_block(),     '',     'no block' );
     is( $puzzle->{'cells'}[2]->is_bad(),        1,      'bad' );
     is( $puzzle->{'cells'}[2]->is_free(),       '',     'not free (is bad)' );
     is( $puzzle->{'cells'}[2]->is_goal(),       '',     'not goal' );
+    is( $puzzle->{'cells'}[2]->is_active(),     1,      'active' );
     }
 
 sub test1
@@ -522,46 +560,55 @@ sub test1
     is( $puzzle->{'cells'}[0]->is_bad(),        1,              'bad (corner)' );
     is( $puzzle->{'cells'}[0]->is_free(),       '',             'not free (corner)' );
     is( $puzzle->{'cells'}[0]->is_goal(),       '',             'not goal' );
+    is( $puzzle->{'cells'}[0]->is_active(),     1,              'active' );
     is( $puzzle->{'cells'}[1]{'is_corner'},     '',             'not corner' );
     is( $puzzle->{'cells'}[1]->has_block(),     '',             'no block' );
     is( $puzzle->{'cells'}[1]->is_bad(),        '',             'not bad' );
     is( $puzzle->{'cells'}[1]->is_free(),       1,              'free (mover doesn\'t count)' );
     is( $puzzle->{'cells'}[1]->is_goal(),       1,              'goal' );
+    is( $puzzle->{'cells'}[1]->is_active(),     1,              'active' );
     is( $puzzle->{'cells'}[2]{'is_corner'},     1,              'corner' );
     is( $puzzle->{'cells'}[2]->has_block(),     '',             'no block' );
     is( $puzzle->{'cells'}[2]->is_bad(),        1,              'bad (corner)' );
     is( $puzzle->{'cells'}[2]->is_free(),       '',             'not free (is bad)' );
     is( $puzzle->{'cells'}[2]->is_goal(),       '',             'not goal' );
+    is( $puzzle->{'cells'}[2]->is_active(),     1,              'active' );
     is( $puzzle->{'cells'}[3]{'is_corner'},     '',             'not a corner' );
     is( $puzzle->{'cells'}[3]->has_block(),     1,              'block' );
     is( $puzzle->{'cells'}[3]->is_bad(),        '',             'not bad' );
     is( $puzzle->{'cells'}[3]->is_free(),       '',             'not free (has block)' );
     is( $puzzle->{'cells'}[3]->is_goal(),       '',             'not goal' );
+    is( $puzzle->{'cells'}[3]->is_active(),     1,              'active' );
     is( $puzzle->{'cells'}[4]{'is_corner'},     '',             'not corner' );
     is( $puzzle->{'cells'}[4]->has_block(),     1,              'has block' );
     is( $puzzle->{'cells'}[4]->is_bad(),        '',             'not bad' );
     is( $puzzle->{'cells'}[4]->is_free(),       '',             'not free (has block)' );
     is( $puzzle->{'cells'}[4]->is_goal(),       '',             'not goal' );
+    is( $puzzle->{'cells'}[4]->is_active(),     1,              'active' );
     is( $puzzle->{'cells'}[5]{'is_corner'},     '',             'not corner' );
     is( $puzzle->{'cells'}[5]->has_block(),     '',             'no block' );
     is( $puzzle->{'cells'}[5]->is_bad(),        '',             'not bad' );
     is( $puzzle->{'cells'}[5]->is_free(),       1,              'free' );
     is( $puzzle->{'cells'}[5]->is_goal(),       '',             'not goal' );
+    is( $puzzle->{'cells'}[5]->is_active(),     1,              'active' );
     is( $puzzle->{'cells'}[6]{'is_corner'},     1,              'corner' );
     is( $puzzle->{'cells'}[6]->has_block(),     '',             'no block' );
     is( $puzzle->{'cells'}[6]->is_bad(),        '',             'not bad (is goal)' );
     is( $puzzle->{'cells'}[6]->is_free(),       1,              'free' );
     is( $puzzle->{'cells'}[6]->is_goal(),       1,              'goal' );
+    is( $puzzle->{'cells'}[6]->is_active(),     1,              'active' );
     is( $puzzle->{'cells'}[7]{'is_corner'},     '',             'not corner' );
     is( $puzzle->{'cells'}[7]->has_block(),     '',             'no block' );
     is( $puzzle->{'cells'}[7]->is_bad(),        '',             'not bad' );
     is( $puzzle->{'cells'}[7]->is_free(),       1,              'free' );
     is( $puzzle->{'cells'}[7]->is_goal(),       '',             'not goal' );
+    is( $puzzle->{'cells'}[7]->is_active(),     1,              'active' );
     is( $puzzle->{'cells'}[8]{'is_corner'},     1,              'corner' );
     is( $puzzle->{'cells'}[8]->has_block(),     '',             'no block' );
     is( $puzzle->{'cells'}[8]->is_bad(),        1,              'bad' );
     is( $puzzle->{'cells'}[8]->is_free(),       '',             'not free (is bad)' );
     is( $puzzle->{'cells'}[8]->is_goal(),       '',             'not goal' );
+    is( $puzzle->{'cells'}[8]->is_active(),     1,              'active' );
 
     @possible_moves = $puzzle->possible_moves();
     is( scalar( @possible_moves ), 3, 'number of possible moves' );
@@ -620,8 +667,6 @@ sub test1
     is( $puzzle->{'score'},                 3,  'score' );
     is( $puzzle->{'top_score'},             3,  'top score' );
     is( $puzzle->is_solved(),               1,  'solved' );
-
-
     }
 
 __DATA__
