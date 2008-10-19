@@ -17,7 +17,7 @@ use FindBin qw( $RealBin $Script );  # $Script is the name of the program
 use lib "$RealBin/../lib";           # where to find private libraries
 use YAML;                            # VERY useful for debugging
 
-my $puzzles = import_puzzles( 'puzzles.txt' );
+my $puzzles = import_puzzles();
 
 foreach my $puzzle ( @{$puzzles} )
     {
@@ -31,16 +31,13 @@ exit 0;
 #
 sub import_puzzles
     {
-    my $filename = shift;
-    open( IMPORT_FILE, "<", $filename ) or die "Can't open import file $filename: $!\n";
-
     my $puzzles = [];
     my $row     = 0;
     my $column  = 0;
     my $puzzle  = undef
     my $mover   = undef;
 
-    while( my $line = <IMPORT_FILE> )
+    while( my $line = <> )
         {
         chomp( $line );
 
@@ -94,8 +91,6 @@ sub import_puzzles
         }
 
     push( @{$puzzles}, $puzzle )   if $puzzle;
-
-    close( IMPORT_FILE );
 
     $_->setup() foreach @{$puzzles};
 
