@@ -128,7 +128,26 @@ sub push_cell
             );
     }
 
-sub setup { my $s = shift; $s->{'solved_mask'} = ( 1 << scalar( @{$s->{'blocks'}} ) ) - 1; }
+sub setup
+    {
+    my $puzzle = shift;
+    $puzzle->{'solved_mask'} = ( 1 << scalar( @{$puzzle->{'blocks'}} ) ) - 1;
+    $puzzle->analyse_cells();
+    }
+
+sub analyse_cells
+    {
+    my $puzzle = shift;
+    foreach my $row ( @{$puzzle->{'table'}} )
+        {
+        foreach my $cell ( @{$row} )
+            {
+            next unless $cell->{'up'} and $cell->{'down'} and $cell->{'left'} and $cell->{'right'};
+            $cell->{'is_corner'} = ( $cell->{'up'}->is_wall()   || $cell->{'down'}->is_wall()  )
+                                && ( $cell->{'left'}->is_wall() || $cell->{'right'}->is_wall() );
+            }
+        }
+    }
 
 sub is_solved
     {
@@ -195,12 +214,26 @@ sub restore
 sub dump
     {
     my $puzzle = shift;
+    my $long   = shift || 0;
 
     printf "Puzzle: %d\n", $puzzle->{'id'};
     printf "State:  %s ( %x <=> %x )\n", ( $puzzle->is_solved() ? 'SOLVED' : 'unsolved' ), $puzzle->{'state'}, $puzzle->{'solved_mask'};
     foreach my $row ( @{$puzzle->{'table'}} )
         {
-        printf "%s\n", join( "", map { $_->display() } @{$row} );
+#         printf "%s\n", join( "", map { $_->display() } @{$row} );
+#         printf "%s\n", join( "", map { sprintf "%s%s%s%s%s", ( $_->{'left'} ? '<' : ' ' ), ( $_->{'up'} ? '^' : ' ' ), $_->display(), ( $_->{'down'} ? 'v' : ' ' ), ( $_->{'right'} ? '>' : ' ' ), } @{$row} );
+        my $cell = $row->[0];
+        do
+            {
+            printf( "%s%s%s%s%s",
+                   ( $long ? ( $cell->{'left'}  ? '<' : ' ' ) : '' ),
+                   ( $long ? ( $cell->{'up'}    ? '^' : ' ' ) : '' ),
+                   $cell->display(),
+                   ( $long ? ( $cell->{'down'}  ? 'v' : ' ' ) : '' ),
+                   ( $long ? ( $cell->{'right'} ? '>' : ' ' ) : '' )
+                   );
+            } while( $cell = $cell->{'right'} );
+        print "\n";
         }
     }
 
@@ -229,9 +262,17 @@ sub left      { my $cell = shift; $cell->{'left'}; }
 sub right     { my $cell = shift; $cell->{'right'}; }
 sub is_goal   { my $cell = shift; $cell->{'display'} eq '.'; }
 sub is_wall   { my $cell = shift; $cell->{'display'} eq '#'; }
-sub is_bad    { my $cell = shift; $cell->{'is_bad'}; }
+sub is_bad    { my $cell = shift; $cell->{'is_corner'}; }
 sub is_free   { my $cell = shift; not ( $cell->has_block() or $cell->is_wall() or $cell->is_bad() ); }
-sub display   { my $cell = shift; $cell->{'contents'} ? $cell->{'contents'}->display() : $cell->{'display'}; }
+
+sub display  
+    {
+    my $cell = shift;
+    return $cell->{'contents'}->display()   if $cell->{'contents'};
+    return $cell->{'display'}               if $cell->is_wall or $cell->is_goal();
+    return 'X'                              if $cell->is_bad();
+    return $cell->{'display'};
+    }
 
 package block;
 
