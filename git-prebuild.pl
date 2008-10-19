@@ -28,7 +28,8 @@ my ( $release, $patch, $commit ) = ( $git_description =~ /([^-]+)-(\d+)-g(\w+)/ 
 $release .= ".${patch}" if $patch;
 if( ! $release )
     {
-    my $git_commit = qx{ git log -1 --pretty format="%h %ci" };
+    my @cmd = qw{ git log -1 --pretty }, "format=%h %ci";
+    my $git_commit = qx{ @cmd };
     $release = "PRE-RELEASE $git_commit";
     }
 
