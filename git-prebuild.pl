@@ -26,11 +26,15 @@ system( "git", "commit", "-a", "-m", "automatic build commit" );
 my $git_description = qx{ git describe --long };
 my ( $release, $patch, $commit ) = ( $git_description =~ /([^-]+)-(\d+)-g(\w+)/ );
 $release .= ".${patch}" if $patch;
-$release = "PRE-RELEASE" unless $release;
+if( ! $release )
+    {
+    my $git_commit = qx{ git log -1 --pretty format="%h %ci" };
+    $release = "PRE-RELEASE $git_commit";
+    }
 
 if( open( VERSION, ">", "$git_dir/version.txt" ) )
     {
-    print VERSION $release;
+    print VERSION "$release\n";
     close( VERSION );
     }
 
