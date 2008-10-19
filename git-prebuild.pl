@@ -38,4 +38,4 @@ if( open( VERSION, ">", "$git_dir/version.txt" ) )
     close( VERSION );
     }
 
-system( "git", "log", ">", "$git_dir/CHANGELOG" );
+system( "git log > $git_dir/CHANGELOG" );
