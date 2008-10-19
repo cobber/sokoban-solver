@@ -1,19 +1,15 @@
 #!/usr/local/bin/perl
 
-# Puzzle File Definition:
-#
-#   width
-#   height
-#   map
+# Puzzle Map Definition:
 #
 #   map characters:
 #       <space> empty
 #       #       wall
-#       _       goal
-#       x       box
-#       X       box on goal
-#       o       mover
-#       O       mover on goal
+#       .       goal
+#       $       box
+#       *       box on goal
+#       @       mover
+#       +       mover on goal
 
 use strict;
 use warnings;
@@ -25,10 +21,6 @@ my $puzzles = import_puzzles( 'puzzles.txt' );
 
 foreach my $puzzle ( @{$puzzles} )
     {
-    print "\n\nNew Puzzle:\n";
-    $puzzle->dump();
-    my @trace = $puzzle->solve();
-    printf "Trace: %s\n", join( ', ', @trace );
     $puzzle->dump();
     }
 
@@ -43,8 +35,6 @@ sub import_puzzles
     open( IMPORT_FILE, "<", $filename ) or die "Can't open import file $filename: $!\n";
 
     my $puzzles = [];
-    my $width   = 0;
-    my $height  = 0;
     my $row     = 0;
     my $column  = 0;
     my $puzzle  = undef
@@ -56,68 +46,51 @@ sub import_puzzles
 
         if( $line =~ m:^(//.*|\s*)$: )
             {
-            $width  = 0;
-            $height = 0;
-            push( @{$puzzles}, $puzzle )   if $puzzle;
-            $puzzle = undef;
+            if( $puzzle )
+                {
+                push( @{$puzzles}, $puzzle );
+                $puzzle = undef;
+                }
+            next;
             }
 
-        if( $line =~ /^\s*(\d+)\s*$/ )
-            {
-            $width  = $1, next  unless $width;
-            $height = $1, next  unless $height;
-            }
-
-        if( ! $puzzle and $width and $height )
+        if( ! $puzzle )
             {
             $puzzle = puzzle->new(
-                    'width'  => $width,
-                    'height' => $height,
-                    'status' => 0,
+                    'id'     => @{$puzzles} + 1,
+                    'width'  => 0,
+                    'state'  => 0,
                     'table'  => [],
                     'blocks' => [],
+                    'mover'  => undef,
                     );
-            $row = 0;
             }
 
-        next    unless $puzzle;
-
-        my $table = $puzzle->{'table'};
-        $column = 0;
+        $puzzle->push_row();
         foreach my $import_cell ( split( '', $line ) )
             {
-            my $cell = cell->new( 'location' => $row*$width+$column );
+            my $cell_display = ' ';
+            $cell_display    = '#' if $import_cell =~ /#/;
+            $cell_display    = '.' if $import_cell =~ /[\.\*\+]/;
 
-            $cell->{'display'} = ( $import_cell =~ /[_X]/ ) ? '_' : ( ( $import_cell =~ /#/ ) ? '#' : ' ' );
+            my $cell = cell->new( 'display' => $cell_display, );
+            $puzzle->push_cell( $cell );
 
-            $table->[$row*$width+$column] = $cell;
-
-            $cell->{'up'} = $table->[($row-1)*$width+$column]   if $row;
-            $table->[($row-1)*$width+$column]{'down'} = $cell   if $row;
-            $cell->{'left'} = $table->[$row*$width+$column-1]   if $column;
-            $table->[$row*$width+$column-1]{'right'} = $cell    if $column;
-
-            if( $import_cell =~ /x/i )
+            if( $import_cell =~ /[\$*]/ )
                 {
-                my $block = block->new( 'puzzle' => $puzzle, 'display' => "\L$import_cell", 'id' => scalar( @{$puzzle->{'blocks'}} ), );
+                my $block = block->new( 'cell' => $cell, 'id' => scalar( @{$puzzle->{'blocks'}} ), );
+                $cell->{'contents'} = $block;
                 push( @{$puzzle->{'blocks'}}, $block );
-                $block->move_to( $cell );
                 }
 
-            if( $import_cell =~ /o/i )
+            if( $import_cell =~ /[\@\+]/ )
                 {
-                my $mover = mover->new( 'container' => $cell, 'display' => "\L$import_cell", );
+                my $mover = mover->new( 'cell' => $cell, );
                 $cell->{'contents'} = $mover;
                 $puzzle->{'mover'}  = $mover;
                 }
 
-            $column++;
             }
-            while( $column < $width )
-                {
-                $puzzle->{'table'}[$row*$width+$column++] = cell->new( 'display' => ' ' );
-                }
-        $row++;
         }
 
     push( @{$puzzles}, $puzzle )   if $puzzle;
@@ -133,13 +106,38 @@ package puzzle;
 
 use YAML;
 
-sub new { my $c = shift; return bless { @_ }, $c; }
+sub new { my $class = shift; return bless { @_ }, $class; }
+
+sub push_row
+    {
+    my $puzzle = shift;
+    push( @{$puzzle->{'table'}}, [] );
+    }
+
+sub push_cell
+    {
+    my $puzzle = shift;
+    my $cell   = shift;
+    my $table = $puzzle->{'table'};
+
+    push( @{$table->[-1]}, $cell );
+
+    my $row     = $#{$table};
+    my $column  = $#{$table->[$row]};
+
+    $puzzle->{'width'} = $column    if $column > $puzzle->{'width'};
+
+    $cell->connect(
+            'up'   => $row    ? $table->[$row-1][$column] : undef,
+            'left' => $column ? $table->[$row][$column-1] : undef,
+            );
+    }
 
 sub setup { my $s = shift; $s->{'solved_mask'} = ( 1 << scalar( @{$s->{'blocks'}} ) ) - 1; }
 
 sub is_solved
     {
-    my $s = shift; return $s->{'solved_mask'} == $s->{'status'};
+    my $s = shift; return $s->{'solved_mask'} == $s->{'state'};
     }
 
 sub solve
@@ -185,7 +183,7 @@ sub solve
 sub state
     {
     my $s = shift;
-    return join( ':', $s->{'status'}, $s->{'mover'}->location(), sort { $a <=> $b } map { $_->location() } @{$s->{'blocks'}} );
+    return join( ':', $s->{'state'}, $s->{'mover'}->location(), sort { $a <=> $b } map { $_->location() } @{$s->{'blocks'}} );
     }
 
 sub restore
@@ -194,68 +192,82 @@ sub restore
 #     printf "restoring: %s", $s->state();
     print "---\n";
     my @locations = split( /:/, shift );
-    $s->{'status'} = shift( @locations );
+    $s->{'state'} = shift( @locations );
     $_->move_to( $s->{'table'}[shift( @locations )] )  foreach $s->{'mover'}, @{$s->{'blocks'}};
 #     printf " to: %s\n", $s->state();
     }
 
 sub dump
     {
-    my $s = shift;
+    my $puzzle = shift;
 
-#     printf "State:  %s\n", $s->state();
-#     printf "Status: %s ( %x <=> %x )\n", ( $s->is_solved() ? 'SOLVED' : 'unsolved' ), $s->{'status'}, $s->{'solved_mask'};
-    my $width = $s->{'width'};
-    foreach my $cell ( @{$s->{'table'}} )
+    printf "Puzzle: %d\n", $puzzle->{'id'};
+    printf "State:  %s ( %x <=> %x )\n", ( $puzzle->is_solved() ? 'SOLVED' : 'unsolved' ), $puzzle->{'state'}, $puzzle->{'solved_mask'};
+    foreach my $row ( @{$puzzle->{'table'}} )
         {
-        print $cell->display();
-        unless( --$width )
-            {
-            $width = $s->{'width'};
-            print "\n";
-            }
+        printf "%s\n", join( "", map { $_->display() } @{$row} );
         }
     }
 
 package cell;
 
-sub new      { my $class = shift; return bless { @_ }, $class; }
+sub new       { my $class = shift; return bless { @_ }, $class; }
 
-sub location { my $cell = shift; $cell->{'location'}; }
-sub is_goal  { my $cell = shift; $cell->{'display'} eq '_'; }
-sub is_wall  { my $cell = shift; $cell->{'display'} eq '#'; }
-sub is_free  { my $cell = shift; not ( $cell->{'contents'} or $cell->is_wall() ); }
+sub connect
+    {
+    my $cell = shift;
+    my $opts = { @_ };
+    my $up   = $opts->{'up'}   || undef;
+    my $left = $opts->{'left'} || undef;
 
-sub display  { my $cell = shift; $cell->{'contents'} ? $cell->{'contents'}->display() : $cell->{'display'}; }
+    $cell->{'up'}    = $up      if $up;
+    $up->{'down'}    = $cell    if $up;
+    $cell->{'left'}  = $left    if $left;
+    $left->{'right'} = $cell    if $left;
+    }
+
+sub has_block { my $cell = shift; ref( $cell->{'contents'} ) =~ /block/; }
+sub contents  { my $cell = shift; $cell->{'contents'}; }
+sub up        { my $cell = shift; $cell->{'up'}; }
+sub down      { my $cell = shift; $cell->{'down'}; }
+sub left      { my $cell = shift; $cell->{'left'}; }
+sub right     { my $cell = shift; $cell->{'right'}; }
+sub is_goal   { my $cell = shift; $cell->{'display'} eq '.'; }
+sub is_wall   { my $cell = shift; $cell->{'display'} eq '#'; }
+sub is_bad    { my $cell = shift; $cell->{'is_bad'}; }
+sub is_free   { my $cell = shift; not ( $cell->has_block() or $cell->is_wall() or $cell->is_bad() ); }
+sub display   { my $cell = shift; $cell->{'contents'} ? $cell->{'contents'}->display() : $cell->{'display'}; }
 
 package block;
 
-sub new      { my $c = shift; return bless { @_ }, $c; }
-sub location { my $s = shift; $s->{'container'}->location(); }
-sub id       { my $s = shift; $s->{'id'}; }
-sub mask     { my $s = shift; 1 << $s->{'id'}; }
-sub display  { my $s = shift; $s->is_home() ? "\U$s->{'display'}" : $s->{'display'}; }
-sub is_home  { my $s = shift; $s->{'container'}->is_goal(); }
-sub can_move { my $s = shift; my $direction = shift; $s->{'container'}{$direction} and $s->{'container'}{$direction}->is_free(); }
-sub move     { my $s = shift; my $direction = shift; $s->move_to( $s->{'container'}{$direction} ); }
+sub new      { my $class = shift; return bless { @_ }, $class; }
+sub cell     { my $block = shift; $block->{'cell'}; }
+sub id       { my $block = shift; $block->{'id'}; }
+sub mask     { my $block = shift; 1 << $block->{'id'}; }
+sub display  { my $block = shift; $block->is_home() ? '*' : '$'; }
+sub is_home  { my $block = shift; $block->{'cell'}->is_goal(); }
+sub can_move { my $block = shift; my $direction = shift; $block->{'cell'}{$direction} and $block->{'cell'}{$direction}->is_free(); }
+sub move     { my $block = shift; my $direction = shift; $block->move_to( $block->{'cell'}{$direction} ); }
 sub move_to
     {
-    my $s = shift;
-    $s->{'puzzle'}{'status'}      &= ~$s->mask();
-    $s->{'container'}{'contents'}  = undef if $s->{'container'};
-    $s->{'container'}              = shift;
-    $s->{'container'}{'contents'}  = $s;
-    $s->{'puzzle'}{'status'}      |= $s->mask() if $s->is_home();
+    my $block = shift;
+    $block->{'puzzle'}{'state'}  &= ~$block->mask();
+    $block->{'cell'}{'contents'}  = undef if $block->{'cell'};
+    $block->{'cell'}              = shift;
+    $block->{'cell'}{'contents'}  = $block;
+    $block->{'puzzle'}{'state'}  |= $block->mask() if $block->is_home();
     }
 
 package mover;
 use base qw( block );
 
+sub display  { my $mover = shift; $mover->{'cell'}->is_goal() ? '+' : '@'; }
+
 sub can_move
     {
-    my $s = shift;
+    my $mover = shift;
     my $direction = shift;
-    my $neighbour = $s->{'container'}{$direction} or return;
+    my $neighbour = $mover->{'cell'}{$direction} or return;
 #     printf "mover can move %s: %s\n", $direction, ( $neighbour->is_free() or ( $neighbour->{'contents'} and $neighbour->{'contents'}->can_move( $direction ) ) ) ? "yes" : "no";
     return ( $neighbour->is_free()
             or ( $neighbour->{'contents'} and $neighbour->{'contents'}->can_move( $direction ) ) );   # can block move
@@ -263,17 +275,17 @@ sub can_move
 
 sub move
     {
-    my $s = shift;
+    my $mover = shift;
     my $direction = shift;
-    my $neighbour = $s->{'container'}{$direction} or return;
+    my $neighbour = $mover->{'cell'}{$direction} or return;
     $neighbour->{'contents'} and $neighbour->{'contents'}->move( $direction );  # move the block
-    $s->move_to( $neighbour );                                                  # move mover
+    $mover->move_to( $neighbour );                                                  # move mover
     }
 
 sub move_to
     {
-    my $s = shift;
-    $s->{'container'}{'contents'}  = undef if $s->{'container'};
-    $s->{'container'}              = shift;
-    $s->{'container'}{'contents'}  = $s;
+    my $mover = shift;
+    $mover->{'cell'}{'contents'}  = undef if $mover->{'cell'};
+    $mover->{'cell'}              = shift;
+    $mover->{'cell'}{'contents'}  = $mover;
     }
