@@ -84,10 +84,13 @@ foreach my $puzzle ( @{$puzzles}[@puzzle_range] )
     printf "Solving Puzzle Number %d\n", $puzzle->{'id'};
     $puzzle->dump();
     my $start = time();
+    $puzzle->{'required_steps'} = 0;
+    $puzzle->{'previous_score'} = 0;
     my @solution = $puzzle->solve();
+    print "\n";
     my $duration = time() - $start;
     $puzzle->replay( @solution );
-    printf "Solution took %d seconds\n", $duration;
+    printf "Solution took %d seconds and %d tries to find a %d step solution\n", $duration, $puzzle->{'required_steps'}, scalar( @solution );
     }
 
 exit 0;
@@ -354,6 +357,12 @@ sub solve
 
     return if $level > 80;  # prevent deep recursion - solution must have less than 80 moves
     return if $puzzle->{'has_tried'}{$state_id}++;
+
+    $puzzle->{'required_steps'}++;
+    if( $puzzle->{'previous_score'} != $puzzle->{'score'} )
+        {
+        printf "%s\r", join( '', map { $_ ? '#' : '-' } reverse sort split( '', sprintf( "%0*b", scalar @{$puzzle->{'blocks'}}, $puzzle->{'score'} ) ) );
+        }
 
     my @possible_moves = $puzzle->possible_moves();
 
