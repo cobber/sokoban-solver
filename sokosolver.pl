@@ -36,7 +36,7 @@ use strict;
 use warnings;
 use FindBin qw( $RealBin $Script );  # $Script is the name of the program
 use lib "$RealBin/../lib";           # where to find private libraries
-use YAML;                            # VERY useful for debugging
+# use YAML;                            # VERY useful for debugging
 
 my $opposite = {
                 'up'    => 'down',
@@ -168,8 +168,6 @@ sub import_puzzles
 
 package puzzle;
 
-use YAML;
-
 sub new
     {
     my $class = shift;
@@ -215,10 +213,14 @@ sub setup
     my $puzzle = shift;
     $puzzle->{'top_score'} = ( 1 << scalar( @{$puzzle->{'blocks'}} ) ) - 1;
     $puzzle->mark_corners();
+    $puzzle->setup_edge_row_groups();
     $puzzle->{'mover'}->{'cell'}->set_active();
     $puzzle->{'original_state'} = $puzzle->state();
     }
 
+# Corners are bad new - once you've pushed a box into one, you can never get it out again
+# Identify and mark corners so that they can be avoided
+# Note: the is_bad routine has an extra check for a goal being in a corner
 sub mark_corners
     {
     my $puzzle = shift;
@@ -229,6 +231,48 @@ sub mark_corners
             next unless $cell->{'up'} and $cell->{'down'} and $cell->{'left'} and $cell->{'right'};
             $cell->{'is_corner'} = ( $cell->{'up'}->is_wall()   || $cell->{'down'}->is_wall()  )
                                 && ( $cell->{'left'}->is_wall() || $cell->{'right'}->is_wall() );
+            }
+        }
+    }
+
+# optimisation:
+#   edge-rows are almost as bad as corners - boxes can't be moved away from such rows.
+#   This routine identifies groups of cells which can trap boxes, and limits
+#   the number of boxes in that row to the number of goals.
+sub setup_edge_row_groups
+    {
+    my $puzzle = shift;
+
+    foreach my $start_cell ( @{$puzzle->{'cells'}} )
+        {
+        next unless $start_cell->{'is_corner'};
+        next if $start_cell->{'down'}->is_wall() and $start_cell->{'right'}->is_wall();
+        DIRECTION:
+        foreach my $direction ( qw( down right ) )
+            {
+            my $check_cell    = $start_cell;
+            my @wall_sides    = ( $direction eq 'down' ) ? qw( left right ) : qw( up down );
+            my $group         = {};
+            $group->{'cells'} = [];
+            $group->{'goals'} = 0;
+
+            while( $check_cell and not $check_cell->is_wall() )
+                {
+                next DIRECTION unless $check_cell->{$wall_sides[0]}             and $check_cell->{$wall_sides[1]};
+                next DIRECTION unless $check_cell->{$wall_sides[0]}->is_wall()  or  $check_cell->{$wall_sides[1]}->is_wall();
+
+                $group->{'goals'}++   if $check_cell->is_goal();
+                push( @{$group->{'cells'}}, $check_cell );
+
+                $check_cell = $check_cell->{$direction};
+                }
+
+            # at no point was there a way to get a box away from this wall
+            # if it's more than 2 cells long, store it as a edge-group
+            if( @{$group->{'cells'}} > 2 )
+                {
+                push( @{$_->{'edge_groups'}}, $group )     foreach @{$group->{'cells'}};
+                }
             }
         }
     }
@@ -328,7 +372,7 @@ sub solve
 
         if( @successful_trace )
             {
-            @trace = ( { 
+            @trace = ( {
                         'block_id'      => $block->{'id'},
                         'block_display' => $block->{'display'},
                         'direction'     => $direction,
@@ -383,6 +427,14 @@ sub clear_cells
             $cell->{'contents'}         = undef;
             }
         $cell->{'is_active'} = 0;
+# TODO: track edge_group status numerically - instead of traversing the lists over and over and over....
+#         if( $cell->{'edge_groups'} )
+#             {
+#             foreach my $edge_group ( @{$cell->{'edge_groups'}} )
+#                 {
+#                 $edge_group->{'blocks'} = 0;
+#                 }
+#             }
         }
     }
 
@@ -410,13 +462,21 @@ sub dump
         my $cell = $row->[0];
         do
             {
-            printf( "%s%s%s%s%s",
-                   ( $long ? ( $cell->{'left'}  ? '<' : ' ' ) : '' ),
-                   ( $long ? ( $cell->{'up'}    ? '^' : ' ' ) : '' ),
-                   $cell->display(),
-                   ( $long ? ( $cell->{'down'}  ? 'v' : ' ' ) : '' ),
-                   ( $long ? ( $cell->{'right'} ? '>' : ' ' ) : '' )
-                   );
+            if( $long )
+                {
+                printf( "%s%s%s[%2d]%s%s",
+                    ( $cell->{'left'}  ? '<' : ' ' ),
+                    ( $cell->{'up'}    ? '^' : ' ' ),
+                    $cell->display(),
+                    $cell->{'id'},
+                    ( $cell->{'down'}  ? 'v' : ' ' ),
+                    ( $cell->{'right'} ? '>' : ' ' ),
+                    );
+                }
+            else
+                {
+                printf( "%s", $cell->display() );
+                }
             } while( $cell = $cell->{'right'} );
         print "\n";
         }
@@ -473,8 +533,33 @@ sub left      { my $cell = shift; $cell->{'left'}; }
 sub right     { my $cell = shift; $cell->{'right'}; }
 sub is_goal   { my $cell = shift; $cell->{'display'} eq '.'; }
 sub is_wall   { my $cell = shift; $cell->{'display'} eq '#'; }
-sub is_bad    { my $cell = shift; $cell->{'is_corner'} and not $cell->is_goal(); }
-sub is_free   { my $cell = shift; not ( $cell->has_block() or $cell->is_wall() or $cell->is_bad() ); }
+sub is_free   { my $cell = shift; my $ref_block = shift; not ( $cell->has_block() or $cell->is_wall() or $cell->is_bad( $ref_block ) ); }
+
+sub is_bad
+    {
+    my $cell      = shift;
+    my $ref_block = shift;
+
+    return 1     if $cell->{'is_corner'} and not $cell->is_goal();
+    return 0 unless $cell->{'edge_groups'};
+
+    my $is_bad = 0;
+    foreach my $group ( @{$cell->{'edge_groups'}} )
+        {
+        my $block_count = 0;
+
+        foreach my $group_cell ( @{$group->{'cells'}} )
+            {
+            # count the number of blocks in this edge_row - but discount this block if it's already in the row
+#             printf "group cell check: %s block, %d <=> %d\n", ( $group_cell->has_block() ? 'has' : 'no' ), $group_cell->{'contents'}{'id'}, $ref_block->{'id'};
+            $block_count++ if $group_cell->has_block() and ( $group_cell->{'contents'}{'id'} != $ref_block->{'id'} );
+            }
+
+        $is_bad = 1     if $block_count >= $group->{'goals'};
+        }
+
+    return $is_bad;
+    }
 
 sub display
     {
@@ -486,7 +571,6 @@ sub display
     }
 
 package block;
-use YAML;
 
 sub new
     {
@@ -510,13 +594,14 @@ sub can_move
     {
     my $block       = shift;
     my $direction   = shift;
-    $block->{'cell'}{$direction}->is_free();
+    $block->{'cell'}{$direction}->is_free( $block );
     }
 
 sub move
     {
-    my $block = shift;
+    my $block     = shift;
     my $direction = shift;
+
     $block->move_to( $block->{'cell'}{$direction} );
     $block->{'cell'}{'is_active'} = 0;
     $block->{'cell'}{$_}->clear_active() foreach grep( ! /$opposite->{$direction}/, qw( up down left right ) );
@@ -526,6 +611,7 @@ sub move
 sub move_to
     {
     my $block = shift;
+
     $block->{'cell'}{'contents'}  = undef   if $block->{'cell'};
     $block->{'cell'}              = shift;
     $block->{'cell'}{'contents'}  = $block;
@@ -555,7 +641,6 @@ sub lift_up  { my $mover = shift; $mover->{'cell'}{'contents'} = undef; $mover->
 
 package test_suite;
 
-use YAML;
 use Test::More;
 
 sub run
