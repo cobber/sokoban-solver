@@ -173,10 +173,12 @@ package puzzle;
 
 sub new
     {
-    my $class = shift;
-    my $puzzle = bless { @_ }, $class;
-    $puzzle->{'table'} = [];
-    $puzzle->{'cells'} = [];
+    my $class              = shift;
+    my $puzzle             = bless { @_ }, $class;
+    $puzzle->{'table'}     = [];
+    $puzzle->{'cells'}     = [];
+    $puzzle->{'blocks'}    = [];
+    $puzzle->{'last_dump'} = time();
     return $puzzle;
     }
 
@@ -361,7 +363,10 @@ sub solve
     $puzzle->{'required_steps'}++;
     if( $puzzle->{'previous_score'} != $puzzle->{'score'} )
         {
-        printf "%s\r", join( '', map { $_ ? '#' : '-' } reverse sort split( '', sprintf( "%0*b", scalar @{$puzzle->{'blocks'}}, $puzzle->{'score'} ) ) );
+        printf "%7d %s\r",
+               $puzzle->{required_steps},
+               join( '', map { $_ ? '#' : '-' } reverse sort split( '', sprintf( "%0*b", scalar @{$puzzle->{'blocks'}}, $puzzle->{'score'} ) ) )
+               ;
         }
 
     my @possible_moves = $puzzle->possible_moves();
